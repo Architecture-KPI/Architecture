@@ -79,6 +79,7 @@
 | Entities та Aggregates | [docs/entities-and-aggregates.md](docs/entities-and-aggregates.md) |
 | Anemic vs Rich Domain Model | [docs/anemic-vs-rich-model.md](docs/anemic-vs-rich-model.md) |
 | Domain Factory | [docs/domain-factory.md](docs/domain-factory.md) |
+| Доменні помилки | [docs/domain-errors.md](docs/domain-errors.md) |
 | CQS та CQRS | [docs/cqs.md](docs/cqs.md) |
 | Патерни синхронної та асинхронної комунікації | [docs/communication-patterns.md](docs/communication-patterns.md) |
 | Модульний моноліт та обмежені контексти | [docs/modular-monolith.md](docs/modular-monolith.md) |
