@@ -22,18 +22,32 @@
 
 ## Anemic Domain Model
 
-Анемічна модель — це об'єкт, який містить **лише дані**. Уся бізнес-логіка знаходиться в зовнішніх сервісах.
+Анемічна модель — це об'єкт, який містить **лише дані** (але може містити тревіальні гетери, сетери) . Уся бізнес-логіка знаходиться в зовнішніх сервісах.
 
 ```python
+from dataclasses import dataclass
+from datetime import datetime
+
+
+@dataclass
 class Booking:
-    def __init__(self, id, user_id, resource_id, start_time, end_time, status):
-        self.id = id
-        self.user_id = user_id
-        self.resource_id = resource_id
-        self.start_time = start_time
-        self.end_time = end_time
-        self.status = status
+    id: int
+    user_id: int
+    resource_id: int
+    start_time: datetime
+    end_time: datetime
+    _status: str = "pending"
+
+    @property
+    def status(self) -> str:
+        return self._status
+
+    @status.setter
+    def status(self, value: str) -> None:
+        self._status = value
 ```
+
+> Тривіальні геттери/сеттери через `@property` — просто повертають або присвоюють значення без жодної логіки. Анемічна модель **може** їх містити, але сама по собі не додає валідації чи бізнес-правил.
 
 ```python
 class BookingService:
@@ -58,14 +72,16 @@ class BookingService:
 
 - **Інваріанти не захищені**: будь-хто може написати `booking.status = "confirmed"` напряму, минаючи перевірки
 - **Логіка розмазана**: якщо два сервіси працюють з `Booking` — правила дублюються або, гірше, розходяться
-- **Модель брехлива**: вона виглядає як доменний об'єкт, але не поводиться як він — це по суті [DTO](dto.md) з претензією
 
 ### Коли це працює?
 
 При всій критиці, Anemic Model — це реальність більшості проєктів. І вона працює нормально, коли:
-- Логіка проста (CRUD без складних правил)
-- Проєкт маленький, одна команда
-- Бізнес-правила не дублюються
+- Простий домен - мало бізнес правил
+- Потрібна вища швидкість розробки
+- Команда не знайома з DDD-підходами (краще Anemic, що працює, ніж Rich, що зроблений неправильно)
+- В ФП стилі домінує саме цей підхід
+
+**Важливо:** оскільки модель не захищає свій стан, відповідальність за коректність лягає на розробників — всі зміни мають проходити через сервіси, а не через пряме присвоєння полів.
 
 ---
 
@@ -74,41 +90,44 @@ class BookingService:
 Багата модель **інкапсулює і дані, і поведінку**. Об'єкт сам відповідає за свої інваріанти — зовнішній код не може привести його до невалідного стану.
 
 ```python
+from dataclasses import dataclass
+from datetime import datetime
+
+
+@dataclass
 class Booking:
-    def __init__(self, id: str, user_id: str, resource_id: str,
-                 time_slot: TimeSlot, status: BookingStatus):
-        self._id = id
-        self._user_id = user_id
-        self._resource_id = resource_id
-        self._time_slot = time_slot
-        self._status = status
+    _id: int
+    _user_id: int
+    _resource_id: int
+    _start_time: datetime
+    _end_time: datetime
+    _status: str = "created"
 
     @property
-    def id(self) -> str:
+    def id(self) -> int:
         return self._id
 
     @property
-    def status(self) -> BookingStatus:
+    def status(self) -> str:
         return self._status
 
     def cancel(self) -> None:
-        if self._status == BookingStatus.CANCELLED:
-            raise DomainError("Вже скасовано")
-        if self._time_slot.is_in_past():
-            raise DomainError("Не можна скасувати минуле бронювання")
-        self._status = BookingStatus.CANCELLED
+        if self._status == "cancelled":
+            raise DomainError("Already cancelled")
+        if self._start_time < datetime.now():
+            raise DomainError("Cannot cancel past booking")
+        self._status = "cancelled"
 
     def confirm(self) -> None:
-        if self._status != BookingStatus.CREATED:
-            raise DomainError("Підтвердити можна лише нове бронювання")
-        self._status = BookingStatus.CONFIRMED
+        if self._status != "created":
+            raise DomainError("Can only confirm created bookings")
+        self._status = "confirmed"
 ```
 
 Зверніть увагу:
 - Поля **приватні** (`self._status`), зовнішній код не може їх змінити напряму
 - Доступ до даних — через **properties** (read-only)
 - Зміна стану — тільки через **методи**, які перевіряють правила
-- Використовує [Value Objects](value-objects.md) (`TimeSlot`, `BookingStatus`) замість примітивів
 
 ### Що це дає?
 
@@ -124,18 +143,16 @@ class Booking:
 |--------|--------|------|
 | Де бізнес-логіка | У зовнішніх сервісах | У самій моделі |
 | Захист інваріантів | Зовнішній (хтось має викликати правильний сервіс) | Внутрішній (модель не дозволяє невалідний стан) |
-| Тестування логіки | Тестуємо сервіс (потрібно мокати залежності) | Тестуємо модель (чистий unit-тест без залежностей) |
 | Ризик дублювання | Високий (два сервіси — два місця для правил) | Низький (одне місце) |
 | Складність на старті | Нижча | Вища |
 | Складність при зростанні | Зростає швидко (логіка розповзається) | Зростає повільніше (логіка локалізована) |
-| Маппінг з БД | Простий (поля = колонки) | Складніший (приватні поля, Value Objects, маппери) |
 
 ---
 
 ## Коли який підхід обирати
 
 **Anemic Model** виправдана, коли:
-- Домен простий — мало бізнес-правил, переважно CRUD
+- Домен простий — мало бізнес-правил
 - Проєкт маленький і не планує рости
 - Команда не знайома з DDD-підходами (краще Anemic, що працює, ніж Rich, що зроблений неправильно)
 
@@ -145,17 +162,13 @@ class Booking:
 - Правила ризикують дублюватися в різних сервісах
 - Проєкт росте, і ціна помилки в бізнес-логіці — висока
 
-### Гібридний підхід
-
-На практиці не обов'язково обирати один підхід для всього проєкту. Деякі [агрегати](entities-and-aggregates.md) можуть бути Rich (складна логіка переходів), а інші — Anemic (простий CRUD). Головне — усвідомлений вибір, а не випадковість.
-
 ---
 
 ## Поширені міфи
 
 ### «Anemic Model — це завжди антипатерн»
 
-Фаулер назвав його антипатерном у контексті **складних доменів**, де бізнес-логіка — головна цінність коду. Для простого CRUD, де логіки мінімум, Anemic Model — прагматичний вибір.
+Фаулер назвав його антипатерном у контексті **складних доменів**, де бізнес-логіка — головна цінність коду. Для проектів з простим доменом і малою кількість бізнес правил, Anemic Model — прагматичний вибір.
 
 ### «Rich Model — це коли модель робить ВСЕ»
 
