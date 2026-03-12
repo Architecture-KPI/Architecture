@@ -222,7 +222,7 @@ class CreateBookingUseCase:
 
 ## DIP як механізм інверсії
 
-Як саме Infrastructure залежить від Domain, а не навпаки? Через **Dependency Inversion Principle** — один із [принципів SOLID](solid.md):
+Як саме Infrastructure залежить від Domain, а не навпаки? Через **Dependency Inversion Principle**:
 
 > Модулі верхнього рівня не повинні залежати від модулів нижнього рівня. Обидва мають залежати від абстракцій.
 

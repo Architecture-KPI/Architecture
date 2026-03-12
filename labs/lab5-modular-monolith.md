@@ -8,7 +8,7 @@
 
 Перед виконанням лабораторної опрацюйте:
 - [Модульний моноліт та обмежені контексти](../docs/modular-monolith.md)
-- [Доменні події та Eventual Consistency](../docs/domain-events.md)
+- [Integration Events та Eventual Consistency](../docs/events.md)
 - [Патерни синхронної та асинхронної комунікації](../docs/communication-patterns.md)
 
 ## Контекст

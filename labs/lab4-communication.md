@@ -9,7 +9,7 @@
 Перед виконанням лабораторної опрацюйте:
 
 - [Патерни синхронної та асинхронної комунікації](../docs/communication-patterns.md)
-- [Доменні події та Eventual Consistency](../docs/domain-events.md) (розділи про доменні події та Event Bus)
+- [Integration Events та Eventual Consistency](../docs/events.md)
 
 ## Контекст
 
