@@ -81,22 +81,6 @@ DTO — це:
 
 ---
 
-## DTO — це не доменна модель
-
-Це найпоширеніша плутанина. Доменна модель і DTO — різні речі з різними задачами:
-
-| Аспект | Доменна модель | DTO |
-|--------|---------------|-----|
-| Мета | Бізнес-логіка, інваріанти | Передача даних через кордон |
-| Поведінка | Має методи, захищає стан | Не має поведінки |
-| Інваріанти | Завжди у валідному стані | Може містити сирі/невалідні дані |
-| Де живе | Domain Layer | На межі шарів (Presentation, Application) |
-| Змінюється коли | Змінюється бізнес-логіка | Змінюється зовнішній контракт (API, UI) |
-
-Приклад: доменна модель `Booking` має статус, бізнес-правила переходу між статусами, перевірку перетину слотів. `BookingResponse` DTO — це просто набір полів, оптимізований під те, що клієнт хоче бачити на екрані (можливо, з ім'ям користувача і назвою ресурсу замість їхніх ID).
-
----
-
 ## Типи DTO та де вони живуть
 
 DTO з'являється всюди, де є кордон. У шаровій архітектурі є кілька таких кордонів:
@@ -133,38 +117,6 @@ class BookingResponse:
 
 **Де живе**: Presentation Layer (або Application Layer, якщо це Read Model для CQS).
 
-### Command / Query DTO
-
-У CQS-архітектурі Command і Query — це теж DTO. Вони переносять дані від Presentation до Application Layer:
-
-```python
-@dataclass(frozen=True)
-class CreateBookingCommand:
-    user_id: str
-    resource_id: str
-    start_time: datetime  # вже розпарсений — це внутрішній контракт
-    end_time: datetime
-```
-
-**Де живе**: Application Layer.
-
-### Загальна картина
-
-```
-HTTP Request
-    ↓
-[CreateBookingRequest]     ← Request DTO (Presentation)
-    ↓ маппінг
-[CreateBookingCommand]     ← Command DTO (Application)
-    ↓ handler
-[Booking]                  ← Domain Model (Domain)
-    ↓ маппінг
-[BookingResponse]          ← Response DTO (Presentation)
-    ↓
-HTTP Response
-```
-
----
 
 ## DTO та валідація
 
@@ -181,27 +133,6 @@ HTTP Response
 
 Це перевірка: «чи дані фізично валідні?» — до того, як вони потраплять глибше в систему.
 
-```python
-@dataclass(frozen=True)
-class CreateBookingRequest:
-    user_id: str
-    resource_id: str
-    start_time: str
-    end_time: str
-
-    def __post_init__(self):
-        if not self.user_id:
-            raise ValidationError("user_id is required")
-        if not self.resource_id:
-            raise ValidationError("resource_id is required")
-        try:
-            datetime.fromisoformat(self.start_time)
-            datetime.fromisoformat(self.end_time)
-        except ValueError:
-            raise ValidationError("Invalid datetime format")
-```
-
-Це **не бізнес-валідація**. DTO не знає, чи існує користувач, чи вільний слот. Він знає лише формат.
 
 ### Бізнес-валідація (в домені)
 
@@ -240,53 +171,6 @@ class BookingFactory:
 - Response містить поля, які не потрібні клієнту (або навпаки — не вистачає полів)
 - Неможливо мати різні представлення для різних клієнтів (мобільний додаток vs веб)
 
-### Правильний потік
-
-Кожен кордон має свій DTO, і на кожному кордоні відбувається **маппінг**:
-
-1. **HTTP → Request DTO**: фреймворк десеріалізує запит у типізований об'єкт
-2. **Request DTO → Command/Query**: контролер маппить (можливо, парсить рядки в типи)
-3. **Domain Model → Response DTO**: після обробки маппимо доменну модель у відповідь для клієнта
-
-Кожен DTO — це **контракт конкретного кордону**. Він може мати інші поля, інші типи, інші назви, ніж DTO на сусідньому кордоні.
-
----
-
-## DTO та маппінг
-
-Якщо DTO різні на кожному кордоні — між ними потрібен маппінг. Це створює «бойлерплейт», але це **свідома ціна за ізоляцію**.
-
-### Де живе маппінг?
-
-| Кордон | Маппінг | Де живе |
-|--------|---------|---------|
-| HTTP Request → Command | Парсинг, перетворення типів | Presentation Layer (контролер) |
-| Domain Model → Response DTO | Проєкція доменних даних у відповідь | Presentation Layer або Application Layer |
-| Domain Model ↔ ORM Entity | Трансляція між доменом і БД | Infrastructure Layer |
-
-### Приклад
-
-```python
-class BookingController:
-    def create(self, request):
-        # HTTP → Request DTO (фреймворк або вручну)
-        req = CreateBookingRequest(**request.json)
-
-        # Request DTO → Command (контролер маппить)
-        command = CreateBookingCommand(
-            user_id=req.user_id,
-            resource_id=req.resource_id,
-            start_time=datetime.fromisoformat(req.start_time),
-            end_time=datetime.fromisoformat(req.end_time),
-        )
-
-        booking_id = self.handler.handle(command)
-        return {"id": booking_id}, 201
-```
-
-Маппінг в контролері — це нормально. Контролер і є тим місцем, де зовнішній світ (HTTP) перекладається у внутрішній (Application).
-
----
 
 ## Поширені міфи
 
@@ -311,17 +195,6 @@ class BookingController:
 Тільки валідація **формату**. Бізнес-правила — в домені. DTO не знає про бізнес, домен не знає про формати HTTP.
 
 ---
-
-## Коли DTO не потрібен
-
-DTO — не срібна куля. Він зайвий, коли:
-
-- **Простий CRUD** без шарової архітектури — один об'єкт на вхід і вихід, немає кордонів між шарами
-- **Внутрішній виклик між двома методами в одному шарі** — немає кордону, немає потреби в контракті
-- **Прототип / MVP** — швидкість розробки важливіша за ізоляцію
-
-DTO з'являється тоді, коли з'являються **кордони між шарами**, і ви хочете, щоб ці шари могли змінюватися незалежно.
-
 ---
 
 ## Джерела

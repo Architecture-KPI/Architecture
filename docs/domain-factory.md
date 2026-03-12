@@ -164,16 +164,17 @@ Factory залежить від **інтерфейсу** `BookingRepository`, я
 Factory кидає **[доменні помилки](domain-errors.md)** — не HTTP-винятки, не помилки фреймворку. Домен не знає про HTTP:
 
 ```python
-class SlotConflictError(DomainError):
-    def __init__(self, resource_id: str, time_slot: TimeSlot):
-        self.resource_id = resource_id
-        self.time_slot = time_slot
-        super().__init__(f"Часовий слот {time_slot} вже зайнятий для ресурсу {resource_id}")
+class DomainError(Exception):
+    pass
 
-class ResourceNotFoundError(DomainError):
-    def __init__(self, resource_id: str):
-        self.resource_id = resource_id
-        super().__init__(f"Ресурс {resource_id} не знайдено")
+class NotFoundError(DomainError):
+    pass
+```
+
+```python
+# Використання у Factory:
+raise DomainError("Slot is already taken for this resource")
+raise NotFoundError(f"Resource {resource_id} not found")
 ```
 
 Presentation Layer перехоплює доменні помилки і маппить їх у HTTP-статуси. Домен каже: «слот зайнятий». Presentation вирішує, що це HTTP 409. Кожен відповідає за своє. Детальніше — в [доменних помилках](domain-errors.md).

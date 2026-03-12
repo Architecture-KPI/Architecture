@@ -5,7 +5,7 @@
 - [Вступ](#вступ)
 - [Проблема: помилки без структури](#проблема-помилки-без-структури)
 - [Що таке доменна помилка](#що-таке-доменна-помилка)
-- [Ієрархія помилок](#ієрархія-помилок)
+- [Структура помилок](#структура-помилок)
 - [Хто кидає доменні помилки](#хто-кидає-доменні-помилки)
 - [Хто обробляє доменні помилки](#хто-обробляє-доменні-помилки)
 - [Помилки як частина Ubiquitous Language](#помилки-як-частина-ubiquitous-language)
@@ -82,65 +82,53 @@ class DomainError(Exception):
 
 | Характеристика | Опис |
 |---------------|------|
-| **Мова домену** | Іменується бізнес-термінами, не технічними (`SlotConflictError`, не `Http409Error`) |
+| **Мова домену** | Повідомлення описує бізнес-ситуацію, не технічну деталь |
 | **Живе в Domain Layer** | Не імпортує нічого з інфраструктури, фреймворків, HTTP |
-| **Типізована** | Кожна бізнес-ситуація — окремий клас, не рядок і не generic Exception |
-| **Несе контекст** | Містить дані, потрібні для розуміння, що сталося |
+| **Відокремлена від generic exceptions** | `DomainError`, а не `ValueError` чи `Exception` — легко перехопити всі бізнес-помилки |
+| **Несе контекст** | Повідомлення містить дані, потрібні для розуміння, що сталося |
 
 ---
 
-## Ієрархія помилок
+## Структура помилок
 
-### Базовий клас
-
-Усі доменні помилки наслідують від одного базового класу. Це дає можливість перехоплювати всі доменні помилки одним `except DomainError`:
+Достатньо одного базового класу `DomainError`. Не потрібно створювати окремий клас для кожної бізнес-ситуації — повідомлення в помилці описує, що саме пішло не так:
 
 ```python
 class DomainError(Exception):
     pass
 ```
 
-### Конкретні помилки
-
-Кожне бізнес-правило, яке може бути порушене, отримує свій клас:
+Використання:
 
 ```python
-class SlotConflictError(DomainError):
-    def __init__(self, resource_id: str, time_slot: 'TimeSlot'):
-        self.resource_id = resource_id
-        self.time_slot = time_slot
-        super().__init__(
-            f"Часовий слот {time_slot} вже зайнятий для ресурсу {resource_id}"
-        )
-
-class BookingAlreadyCancelledError(DomainError):
-    def __init__(self, booking_id: str):
-        self.booking_id = booking_id
-        super().__init__(f"Бронювання {booking_id} вже скасоване")
-
-class InvalidTimeSlotError(DomainError):
-    def __init__(self, start: datetime, end: datetime):
-        self.start = start
-        self.end = end
-        super().__init__(f"Некоректний часовий діапазон: {start} >= {end}")
-
-class ResourceNotFoundError(DomainError):
-    def __init__(self, resource_id: str):
-        self.resource_id = resource_id
-        super().__init__(f"Ресурс {resource_id} не знайдено")
+raise DomainError("Slot is already taken for this resource")
+raise DomainError("Booking is already cancelled")
+raise DomainError(f"Invalid time range: {start} >= {end}")
+raise DomainError(f"Resource {resource_id} not found")
 ```
 
-Кожна помилка:
-- Має зрозумілу назву, що описує **бізнес-ситуацію**
-- Містить **контекстні дані** (який ресурс, який слот, яке бронювання)
-- Генерує людиночитабельне повідомлення
+Один клас — один `except DomainError` в Presentation Layer. Просто, зрозуміло, без зайвої ієрархії.
 
-### Де живе ієрархія
+### Коли додавати підкласи
+
+Підкласи потрібні **тільки якщо** Presentation Layer має по-різному реагувати на різні помилки (наприклад, різні HTTP-статуси):
+
+```python
+class DomainError(Exception):
+    pass
+
+class NotFoundError(DomainError):
+    pass
+```
+
+`NotFoundError` → HTTP 404, все інше `DomainError` → HTTP 409 або 400. Не більше 2-3 підкласів — якщо їх більше, скоріш за все, ви ускладнюєте без потреби.
+
+### Де живуть помилки
 
 ```
 src/
 ├── domain/
-│   ├── errors.py           # DomainError, SlotConflictError, ...
+│   ├── errors.py           # DomainError, NotFoundError
 │   ├── entities/
 │   ├── value_objects/
 │   ├── factories/
@@ -165,7 +153,7 @@ class TimeSlot:
 
     def __post_init__(self):
         if self.start >= self.end:
-            raise InvalidTimeSlotError(self.start, self.end)
+            raise DomainError(f"Invalid time range: {self.start} >= {self.end}")
 ```
 
 Якщо `TimeSlot` існує — він валідний. Це гарантія, яку дає Value Object.
@@ -177,9 +165,9 @@ class TimeSlot:
 ```python
 class Booking:
     def cancel(self) -> None:
-        if self._status == BookingStatus.CANCELLED:
-            raise BookingAlreadyCancelledError(self._id)
-        self._status = BookingStatus.CANCELLED
+        if self._status == "cancelled":
+            raise DomainError("Booking is already cancelled")
+        self._status = "cancelled"
 ```
 
 ### Domain Factory
@@ -189,13 +177,13 @@ class Booking:
 ```python
 class BookingFactory:
     def create(self, user_id, resource_id, start, end) -> Booking:
-        time_slot = TimeSlot(start, end)  # може кинути InvalidTimeSlotError
+        time_slot = TimeSlot(start, end)  # може кинути DomainError
 
         if not self._resource_repo.find_by_id(resource_id):
-            raise ResourceNotFoundError(resource_id)
+            raise NotFoundError(f"Resource {resource_id} not found")
 
         if self._booking_repo.find_overlapping(resource_id, time_slot):
-            raise SlotConflictError(resource_id, time_slot)
+            raise DomainError("Slot is already taken for this resource")
 
         return Booking(...)
 ```
@@ -210,36 +198,31 @@ class BookingFactory:
 
 Домен кидає помилку. Але хто вирішує, що з нею робити? **Presentation Layer**.
 
-### Маппінг у HTTP-статуси
+### Маппінг у HTTP-статуси (FastAPI)
 
-Presentation Layer перехоплює доменні помилки і транслює їх у відповідь, зрозумілу клієнту:
-
-```python
-# presentation/error_handler.py
-def handle_domain_error(error: DomainError) -> tuple[dict, int]:
-    if isinstance(error, SlotConflictError):
-        return {"error": str(error)}, 409
-    if isinstance(error, ResourceNotFoundError):
-        return {"error": str(error)}, 404
-    if isinstance(error, BookingAlreadyCancelledError):
-        return {"error": str(error)}, 409
-    return {"error": str(error)}, 400
-```
-
-Або через реєстр:
+Presentation Layer перехоплює доменні помилки і транслює їх у відповідь, зрозумілу клієнту. У FastAPI це робиться через **exception handlers**:
 
 ```python
-ERROR_STATUS_MAP: dict[type[DomainError], int] = {
-    SlotConflictError: 409,
-    ResourceNotFoundError: 404,
-    BookingAlreadyCancelledError: 409,
-    InvalidTimeSlotError: 422,
-}
+# presentation/exception_handlers.py
+from fastapi import FastAPI
+from fastapi.responses import JSONResponse
+from starlette.requests import Request
 
-def handle_domain_error(error: DomainError) -> tuple[dict, int]:
-    status = ERROR_STATUS_MAP.get(type(error), 400)
-    return {"error": str(error)}, status
+
+async def domain_error_handler(request: Request, exc: Exception) -> JSONResponse:
+    return JSONResponse(status_code=409, content={"detail": str(exc)})
+
+
+async def not_found_error_handler(request: Request, exc: Exception) -> JSONResponse:
+    return JSONResponse(status_code=404, content={"detail": str(exc)})
+
+
+def register_exception_handlers(app: FastAPI) -> None:
+    app.add_exception_handler(DomainError, domain_error_handler)
+    app.add_exception_handler(NotFoundError, not_found_error_handler)
 ```
+
+`NotFoundError` матчиться першим (бо конкретніший), решта `DomainError` ловиться базовим handler'ом. Два класи — два handler'и — нічого зайвого.
 
 ### Чому саме Presentation Layer?
 
@@ -256,16 +239,17 @@ def handle_domain_error(error: DomainError) -> tuple[dict, int]:
 
 ## Помилки як частина Ubiquitous Language
 
-Доменні помилки — це не технічна деталь. Вони описують ситуації, про які знає бізнес:
+Доменні помилки — це не технічна деталь. Вони описують ситуації, про які знає бізнес. Навіть з одним класом `DomainError` — **повідомлення** має говорити мовою домену:
 
-| Помилка | Бізнес-сценарій |
-|---------|----------------|
-| `SlotConflictError` | Клієнт намагається забронювати вже зайнятий слот |
-| `BookingAlreadyCancelledError` | Адміністратор намагається скасувати вже скасоване бронювання |
-| `InvalidTimeSlotError` | Вказано некоректний часовий діапазон |
-| `PastBookingModificationError` | Спроба змінити бронювання в минулому |
+```python
+# Добре — мова домену
+raise DomainError("Slot is already taken for this resource")
+raise DomainError("Cannot cancel past booking")
 
-Назви помилок мають бути зрозумілими не лише розробникам, а й доменним експертам. Якщо бізнес каже «конфлікт слотів» — помилка має називатися `SlotConflictError`, а не `Error409` або `DataIntegrityViolation`.
+# Погано — технічна мова
+raise DomainError("Constraint violation")
+raise DomainError("Invalid state transition")
+```
 
 Це частина Ubiquitous Language з DDD: код говорить мовою домену, включаючи помилки.
 
@@ -304,30 +288,22 @@ class TimeSlot:
 
     def __post_init__(self):
         if self.start >= self.end:
-            raise InvalidTimeSlotError(self.start, self.end)
+            raise DomainError(f"Invalid time range: {self.start} >= {self.end}")
 ```
 
-`ValidationError` — це «дані не пройшли вхідний контроль». `InvalidTimeSlotError` — це «бізнес-правило порушене». Вони можуть виглядати схоже, але відповідають за різне і кидаються різними шарами.
+`ValidationError` — це «дані не пройшли вхідний контроль». `DomainError` — це «бізнес-правило порушене». Вони можуть виглядати схоже, але відповідають за різне і кидаються різними шарами.
 
 ---
 
 ## Поширені міфи
 
-### «Достатньо одного класу DomainError з текстовим повідомленням»
+### «Потрібно створити окремий клас для кожної помилки»
 
-Текстове повідомлення — для людей. Тип помилки — для коду. Presentation Layer вирішує, який HTTP-статус повернути, на основі **типу** помилки, а не парсингу тексту. Якщо всі помилки — один клас, обробник не може відрізнити конфлікт слотів від невалідного діапазону без аналізу рядка.
+Ні. Окремі класи потрібні тільки коли Presentation Layer має по-різному реагувати (наприклад, 404 vs 409). Якщо всі бізнес-помилки обробляються однаково — достатньо одного `DomainError` з описовим повідомленням.
 
 ### «Доменна помилка = HTTP-виняток»
 
-Ні. `HTTPException(409)` — це деталь Presentation Layer. Домен не знає про HTTP. Якщо той самий домен використовується через CLI або gRPC — `HTTPException` не має сенсу. Домен кидає `SlotConflictError`, а Presentation маппить його в 409 для REST, `ALREADY_EXISTS` для gRPC, або повідомлення в терміналі для CLI.
-
-### «Доменні помилки — це overengineering для маленького проєкту»
-
-Базовий `DomainError` та 3-4 конкретних помилки — це кілька рядків коду. Натомість ви отримуєте типізовану обробку помилок, зрозумілі повідомлення і домен, який не залежить від фреймворку. Це не overengineering — це мінімальна гігієна.
-
-### «Потрібно створити помилку для кожного можливого випадку»
-
-Ні. Помилка потрібна, коли бізнес-ситуація потребує **різної реакції** від клієнта або системи. Якщо дві помилки завжди обробляються однаково — можливо, вони не потребують різних класів. Створюйте нову помилку, коли з'являється потреба розрізнити випадки.
+Ні. `HTTPException(409)` — це деталь Presentation Layer. Домен не знає про HTTP. Якщо той самий домен використовується через CLI або gRPC — `HTTPException` не має сенсу. Домен кидає `DomainError`, а Presentation маппить його в 409 для REST, `ALREADY_EXISTS` для gRPC, або повідомлення в терміналі для CLI.
 
 ### «Доменні помилки потрібні тільки для Factory»
 

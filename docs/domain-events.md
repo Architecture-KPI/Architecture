@@ -1,16 +1,15 @@
-# Доменні події
+# Integration Events
 
 ## Зміст
 
 - [Вступ](#вступ)
-- [Що таке доменна подія](#що-таке-доменна-подія)
+- [Що таке Integration Event](#що-таке-integration-event)
 - [Проєктування подій](#проєктування-подій)
 - [Хто публікує події](#хто-публікує-події)
 - [Event Bus: реалізація доставки](#event-bus-реалізація-доставки)
 - [Eventual Consistency](#eventual-consistency)
 - [Outbox Pattern: надійна доставка](#outbox-pattern-надійна-доставка)
 - [Ідемпотентність обробників](#ідемпотентність-обробників)
-- [Domain Events vs Integration Events](#domain-events-vs-integration-events)
 - [Поширені міфи](#поширені-міфи)
 - [Джерела](#джерела)
 
@@ -22,13 +21,13 @@
 
 Якщо handler викликає кожен компонент напряму — він знає про все: notification, analytics, audit. Додаєте четвертий ефект — лізете в handler. П'ятий — знову handler. Він обростає залежностями і стає центром, через який проходить все. Це та [синхронна зв'язаність](communication-patterns.md#coupling-звязаність-через-комунікацію), від якої хочеться позбутися.
 
-Доменна подія — це спосіб сказати: «щось відбулося», не вказуючи, кому це цікаво. Handler публікує факт. Хто реагує — не його справа.
+Integration Event — це спосіб сказати: «щось відбулося», не вказуючи, кому це цікаво. Handler публікує факт. Хто реагує — не його справа.
 
 ---
 
-## Що таке доменна подія
+## Що таке Integration Event
 
-Доменна подія (Domain Event) — це запис про те, що **щось значуще відбулося** в домені. Це тактичний патерн DDD.
+Integration Event — це повідомлення про **значущий бізнес-факт**, яке публікується для інших модулів або сервісів. Це **контракт між bounded contexts** — публічний API у вигляді події.
 
 ```python
 @dataclass(frozen=True)
@@ -41,13 +40,14 @@ class BookingCreated:
     occurred_at: datetime
 ```
 
-Три ключові характеристики:
+Ключові характеристики:
 
 | Характеристика | Опис |
 |---------------|------|
 | **Незмінна (immutable)** | Подія — факт, що вже стався. Факти не змінюються |
 | **Іменується в минулому часі** | `BookingCreated`, `BookingCancelled`, `PaymentProcessed` — не `CreateBooking` |
 | **Містить достатньо контексту** | Підписник має всю інформацію для обробки, без додаткових запитів |
+| **Публічний контракт** | Змінювати обережно — підписники в інших модулях залежать від структури |
 
 ---
 
@@ -80,7 +80,7 @@ class BookingCreated:
 
 ### Скільки даних вкладати?
 
-Правило: достатньо, щоб **відомі підписники** могли обробити подію без зворотних запитів. Не потрібно дублювати весь агрегат — тільки те, що має бізнес-значення для реакції.
+Правило: достатньо, щоб **відомі підписники** могли обробити подію без зворотних запитів. Не потрібно дублювати весь агрегат — тільки те, що має бізнес-значення для реакції. Пам'ятайте: це публічний контракт, кожне поле — зобов'язання.
 
 ### Іменування
 
@@ -97,9 +97,7 @@ class BookingCreated:
 
 ## Хто публікує події
 
-### Варіант 1: Application Layer (Command Handler)
-
-Handler публікує подію після успішного збереження:
+Application Layer (Command Handler) публікує подію після успішного збереження:
 
 ```python
 class CreateBookingCommandHandler:
@@ -123,43 +121,7 @@ class CreateBookingCommandHandler:
         return booking.id
 ```
 
-Просто і зрозуміло. Handler контролює, коли саме публікується подія.
-
-### Варіант 2: Aggregate збирає події
-
-[Агрегат](entities-and-aggregates.md) накопичує події як побічний ефект бізнес-операцій. Handler забирає їх і публікує:
-
-```python
-class Booking:
-    def __init__(self, ...):
-        self._events: list[DomainEvent] = []
-
-    def cancel(self) -> None:
-        if self._status == BookingStatus.CANCELLED:
-            raise DomainError("Вже скасовано")
-        self._status = BookingStatus.CANCELLED
-        self._events.append(BookingCancelled(
-            booking_id=self._id,
-            occurred_at=datetime.utcnow(),
-        ))
-
-    def collect_events(self) -> list[DomainEvent]:
-        events = self._events.copy()
-        self._events.clear()
-        return events
-```
-
-```python
-class CancelBookingCommandHandler:
-    def handle(self, command):
-        booking = self._repo.find_by_id(command.booking_id)
-        booking.cancel()
-        self._repo.save(booking)
-        for event in booking.collect_events():
-            self._event_bus.publish(event)
-```
-
-Переваги: домен сам визначає, які факти відбулися. Handler не вирішує, що є подією — він просто публікує те, що агрегат зібрав.
+Handler контролює, коли саме публікується подія — після успішного збереження, не раніше.
 
 ---
 
@@ -177,7 +139,7 @@ class EventBus:
     def subscribe(self, event_type: type, handler: Callable) -> None:
         self._handlers.setdefault(event_type, []).append(handler)
 
-    def publish(self, event: DomainEvent) -> None:
+    def publish(self, event) -> None:
         for handler in self._handlers.get(type(event), []):
             handler(event)
 ```
@@ -268,7 +230,7 @@ sequenceDiagram
 
 ### Спрощений варіант для моноліту
 
-Для in-process Event Bus з однією БД достатньо публікувати подію **після успішного коміту транзакції**, в рамках одного `with uow`. Повноцінний Outbox з окремою таблицею потрібен, коли подія має пережити перезапуск процесу.
+Для in-process Event Bus з однією БД достатньо публікувати подію **після успішного коміту транзакції**. Повноцінний Outbox з окремою таблицею потрібен, коли подія передається через зовнішній брокер і має пережити збій процесу.
 
 ---
 
@@ -301,28 +263,11 @@ class NotificationHandler:
 
 ---
 
-## Domain Events vs Integration Events
-
-Є відмінність, яку часто ігнорують: не всі події однакові.
-
-| Аспект | Domain Event | Integration Event |
-|--------|-------------|-------------------|
-| Де публікується | Всередині одного bounded context | Між bounded contexts / сервісами |
-| Хто споживає | Компоненти того ж контексту | Інші контексти / зовнішні системи |
-| Контракт | Може змінюватися відносно вільно | Публічний API — змінювати обережно |
-| Деталізація | Може містити внутрішні деталі | Тільки те, що має бізнес-сенс для інших |
-
-В [модульному моноліті](modular-monolith.md) ця різниця стає важливою: Domain Events — внутрішня справа модуля, Integration Events — контракт між модулями. Зміна Integration Event може зламати підписників в інших модулях, тому до нього треба ставитися як до публічного API.
-
-На ранніх етапах (один модуль, мало підписників) ця різниця не критична. Вона з'являється, коли модулів стає кілька.
-
----
-
 ## Поширені міфи
 
-### «Доменна подія — це те саме, що повідомлення в черзі»
+### «Integration Event — це те саме, що повідомлення в черзі»
 
-Ні. Доменна подія — це **бізнес-факт** у предметній області. Повідомлення в черзі — **механізм доставки**. Подія може бути доставлена через in-process виклик, через Event Bus, через message broker — це деталь реалізації. Подія існує незалежно від транспорту.
+Ні. Integration Event — це **бізнес-факт**. Повідомлення в черзі — **механізм доставки**. Подія може бути доставлена через in-process виклик, через Event Bus, через message broker — це деталь реалізації.
 
 ### «Події потрібні тільки для мікросервісів»
 
@@ -349,7 +294,6 @@ class NotificationHandler:
 ## Джерела
 
 - **Eric Evans** — *Domain-Driven Design* (2003) — доменні події як тактичний патерн DDD
-- **Vaughn Vernon** — *Implementing Domain-Driven Design* (2013) — практична реалізація доменних подій, розділення Domain Events та Integration Events (Chapter 8)
-- **Martin Fowler** — [Domain Event](https://martinfowler.com/eaaDev/DomainEvent.html) — визначення патерну та приклади
+- **Vaughn Vernon** — *Implementing Domain-Driven Design* (2013) — практична реалізація подій, розділення Domain Events та Integration Events (Chapter 8)
 - **Gregor Hohpe, Bobby Woolf** — *Enterprise Integration Patterns* (2003) — патерни обміну повідомленнями, на яких базується Event Bus
 - **Chris Richardson** — [Transactional Outbox](https://microservices.io/patterns/data/transactional-outbox.html) — опис Outbox Pattern
